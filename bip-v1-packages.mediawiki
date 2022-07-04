@@ -1,7 +1,7 @@
 <pre>
   BIP: ?
   Layer: Peer Services
-  Title: Child-With-Unconfirmed-Parents (v1) Packages
+  Title: Child-With-Parents (v1) Packages
   Author: Gloria Zhao <gloriajzhao@gmail.com>
   Comments-Summary:
   Comments-URI:
@@ -13,8 +13,8 @@
 
 ==Abstract==
 
-Extend package relay for packages consisting of one transaction and all of its unconfirmed parents.
-Enable the use case in which a child pays for its otherwise-too-low-fee parents and their mempool
+Extend package relay for packages consisting of one transaction and some unconfirmed parents.
+Enable the use case in which a child pays for its otherwise-too-low-fee parent(s) and their mempool
 conflict(s).
 
 ==Motivation==
@@ -88,11 +88,11 @@ Graph (a directed edge exists between a transaction that spends the output of an
 When relaying a package of low-fee parent(s) and high-fee child, the sender and receiver do the
 following:
 
-# Sender announces they have a child-with-unconfirmed-parents package for a child that pays for otherwise-too-low-fee parent(s) using "inv(MSG_PKG1)".
+# Sender announces they have a child-with-parents package for a child that pays for otherwise-too-low-fee parent(s) using "inv(MSG_PKG1)".
 
 # The receiver requests package information using "getdata(MSG_PKG1)".
 
-# The sender provides package information using "pkginfo1", including the blockhash of the sender's best block and the wtxids of the transactions in the package.
+# The sender provides package information using "pkginfo1", listing the wtxids of the transactions in the package.
 
 # The receiver uses the package information to decide how to request the transactions. For example, if the receiver already has some of the transactions in their mempool, they should only request the missing ones.
 
@@ -102,21 +102,11 @@ following:
 
 ''Diagram: The intended protocol flow for a sender relaying zero-fee parents with a high-fee child.''
 
-[[File:./bip-v1-packages/too_low.png|600px]]
-
-''Diagram: A scenario in which a high-fee child is insufficient to pay for its low-fee parents, so
-the sender doesn't need to relay the package. However, individual parents that meet the fee filter
-should still be announced.''
-
-[[File:./bip-v1-packages/cpfp_dedup.png|600px]]
-
-''Diagram: A scenario in which one of the package transactions has already been accepted and is not requested a second time.''
-
-Child-with-unconfirmed-parents package relay is negotiated between two peers through the
+Child-with-parents package relay is negotiated between two peers through the
 "sendpackages" message with version=1. Nodes should only announce support for version 1 package
 relay if their mempool policy supports acceptance of such packages. For example, if a mempool is
-configured to reject transactions with more than 10 ancestors, not all version 1 packages will be
-supported. See [rules](#Child-With-Unconfirmed-Parents-Packages) on version 1 packages.
+configured to reject transactions with more than 3 ancestors, not all version 1 packages will be
+supported. See [rules](#Child-With-Parents-Packages) on version 1 packages.
 
 [[File:./bip-v1-packages/sendpackages_negotiation.png|600px]]
 
@@ -131,8 +121,6 @@ A new inv type, "MSG_PKG1", and new protocol message, "PKGINFO1", are added.
 {|
 |  Field Name  ||  Type  ||  Size  ||   Purpose
 |-
-|blockhash || uint256 || 32 || The chain tip at which this package is defined.
-|-
 |txns_length||CompactSize||1 or 3 bytes|| The number of transactions provided.
 |-
 |txns||List of wtxids||txns_length * 32|| The wtxids of each transaction in the package.
@@ -141,9 +129,7 @@ A new inv type, "MSG_PKG1", and new protocol message, "PKGINFO1", are added.
 
 # The "pkginfo1" message has the structure defined above, with pchCommand == "pkginfo1".
 
-# A "pkginfo1" message contains information about a version 1 package (defined below), referenced by the wtxid of the transaction it pertains to and the current blockhash.
-
-# Upon receipt of a "pkginfo1" message, the node should decide if it wants to validate the package, request transaction data if necessary, etc. If the 'blockhash' field does not match the node's current best chain tip, the message should be discarded.
+# A "pkginfo1" message contains information about a version 1 package (defined below).
 
 # Upon receipt of a malformed "pkginfo1" message or package that does not abide by the rules specified, the sender may be disconnected.
 
@@ -159,108 +145,106 @@ A new inv type, "MSG_PKG1", and new protocol message, "PKGINFO1", are added.
 
 # Nodes may request package information using "getdata(MSG_PKG1)" even if it was not announced using "inv(MSG_PKG1)".
 
-# Nodes should not request package information from peers that have a different best chain tip, since they cannot verify that the package is child-with-unconfirmed-parents unless the 'blockhash' field matches their chain tip.
+# Upon receipt of a "getdata" request for "MSG_PKG1", the node should respond with the version 1 package corresponding to the requested transaction or with NOTFOUND. The node should not assume that the sender is requesting the transaction data as well.
 
-# Upon receipt of a "getdata" request for "MSG_PKG1", the node should respond with the version 1 package corresponding to the requested transaction and its current chain tip, or with NOTFOUND. The node should not assume that the sender is requesting the transaction data as well.
+===Child With Parents Packages===
 
-===Child With Unconfirmed Parents Packages===
+Version 1 package relay supports child-with-parents packages. All v1 packages sent between nodes
+MUST abide by the rules below, otherwise the package is malformed and the sender may be
+disconnected.
 
-Version 1 package relay supports child-with-unconfirmed-parents packages. All v1 packages
-sent between nodes MUST abide by the rules below, otherwise the package is malformed and the sender
-should be disconnected.
+A version 1 or '''child-with-parents''' package can be defined for any transaction that spends an
+unconfirmed input. The child can be thought of as the "representative" of the package, and so these
+packages are announced using `MSG_PKG1(wtxid)` with the wtxid of that transaction.
 
-A version 1 or '''child-with-unconfirmed-parents''' package can be defined for any transaction that spends
-unconfirmed inputs. The child can be thought of as the "representative" of the package. This package
-can be uniquely identified by the transaction's wtxid and the current chain tip block hash.
+A '''child-with-parents''' package MUST be:
 
-A '''child-with-unconfirmed-parents''' package MUST be:
+# '''Child is the last transaction''' The child must be the last transaction in the package.
 
-# '''Sorted topologically.''' For every transaction t in the package, if any of t's parents are present in the package, the parent must appear somewhere in the list before t. In other words, the transactions must be sorted in ascending order of number of ancestors present in the package.
-
-# '''Only 1 child with unconfirmed parents.''' The package must consist of one transaction and its unconfirmed parents. There must not be any other transactions in the package. Other dependency relationships may exist within the package (e.g. one parent may spend the output of another parent) provided that topological order is respected.
-
-# '''All unconfirmed parents.''' All of the child's unconfirmed parents must be present.
+# '''Only 1 child with parents.''' Apart from the child, all other transactions must be direct parents. The package must consist of one transaction and at least one of its unconfirmed parents. There must not be any other transactions in the package. Other dependency relationships may exist within the package (e.g. one parent may spend the output of another parent) provided that topological order is respected.
 
 # '''No conflicts.''' None of the transactions in the package may conflict with each other (i.e. spend the same prevout).
 
 # '''Maximum count and size.''' The number of transactions does not exceed 25. The total weight (as defined by BIP141) of the transactions does not exceed 404000 Wu.
 
-Not all of the child's parents must be present; the child transaction may also spend confirmed
-inputs. However, if the child has confirmed parents, they must not be in the package.
+===Clarifications===
+
+'''Q: What if the transaction has other parents or ancestors? What if its parents are high feerate?''
+
+Not all of the child's parents must be present.
 
 The child's unconfirmed ancestors must not be present unless they are direct parents of the child.
 
-While a child-with-unconfirmed-parents package is perhaps most relevant when the child has a higher
-feerate than its parents, this property is not required to construct a valid package.
+While a child-with-parents package is perhaps most relevant when the child has a higher feerate than
+its parents, this property is not required to construct a valid package.
 
-===Clarifications===
+'''Q: Under what circumstances should a sender announce a child-with-parents package (send "inv(MSG_PKG1)")?'''
 
-'''Q: Under what circumstances should a sender announce a child-with-unconfirmed-parents package?'''
+A child-with-parents package should be announced when all of the following conditions are met:
 
-A child-with-unconfirmed-parents package for a transaction should be announced when it meets all of
-the following conditions:
+- The child's individual feerate is above the peer's fee filter and has one or more parents whose
+  feerates are below the peer's fee filter.
 
-- The transaction's individual feerate is above the peer's fee filter.
+- One or more of the transaction's parents does not meet the peer's fee filter and has not already
+  been announced to this peer.
 
-- The aggregate feerate of the transaction with all of its unconfirmed parents is above the peer's
-  fee filter.
+- The aggregate feerate of the constructed package is above the peer's fee filter.
 
-- One or more of the transaction's parents does not meet the peer's fee filter.
+This logic would be applied when the node is considering the announcement of the child. The parents
+that don't meet the peer's fee filter would not be announced individually (since a BIP 133 fee
+filter is being applied). The parents that do the peer's fee filter should still be announced
+individually.
 
-An "inv(MSG_PKG1)" instead of "inv(WTX)" should be sent for this transaction. Note that each parent
-which meets the peer's fee filter should still be announced normally.
+'''Q: Under what circumstances should a receiver request a child-with-parents package (send "getdata(MSG_PKG1)")?'''
 
-'''Q: When should or shouldn't a node request package info after it has been announced?'''
+Since the announcement does not commit to all of the transactions in the package, the receiver
+should always request the package if the child (i.e. the hash specified in the inv message) is not
+already present in their mempool.
 
-Given that the "pkginfo1" is only useful when its blockhash matches the node's best chain tip, if
-the node knows that its peer has a different chain tip, it should wait until they are synced before
-sending the request "getdata(MSG_PKG1)".
+It is common practice to reject a transaction (identified by its wtxid) if it was already validated
+and rejected, unless a new block has been received since its rejection (the cache is cleared every
+block, since a nonfinal/premature transaction can become valid after a new block is mined).
 
-'''Q: What if a new block arrives in between messages?'''
+'''Q: What happens if the peers have different chain tips?'''
 
-A child-with-unconfirmed-parents package is defined for a transaction based on the current chain
-state. As such, a new block extending the tip may decrease the number of transactions in the package
-(i.e. if any of the transaction's parents were included in the block). In a reorg, the number of
-transactions in the package may decrease or increase (i.e. if any of the transaction's parents were
-included in a block in the previous chain but not the new one).
+Peers may have different chain tips for various reasons (blocks take time to propagate across the
+network, two competing blocks may be found at the same time, a block may arrive in between
+announcement and download, etc.). This protocol doesn't guarantee that the package will relay no
+matter what, but can make a "best effort."
 
-If the new block arrives before the "getdata" or "pkginfo1", nothing needs to change, since the
-sender will create the package based on their chainstate and include the blockhash in the "pkginfo1".
+Whether one peer is ahead or the peers are on different forks, the chain tip mismatch is relevant
+when a subset of the package is confirmed in one chain tip, but unconfirmed in the other. For
+example, if the receiver's chain tip is ahead of the sender's or a new block arrives between
+"getpkgtxns" and "pkgtxns," some subset of the package may have confirmed (e.g. a parent which had
+another child fee-bumping it) in the receiver's chain tip.
 
-[[File:./bip-v1-packages/newblock_benign.png|500px]]
+Currently, it is possible for a node to receive a transaction that has recently confirmed. It can
+attempt to identify such a transaction when one or more of its inputs is unavailable and one or more
+of its outputs is available in the node's UTXO set. The same heuristic should be used to remove
+recently-confirmed transactions from a child-with-parents package. Doing so solves the cases in
+which a node receives a package containing recently-confirmed transactions; it can "deduplicate"
+those and still accept the remaining unconfirmed transactions.
 
-''Diagram: Benign "new block" scenarios.''
-
-If the new block arrives between "pkginfo1" and "getpkgtxns", the receiver should re-request
-package information using "getdata(MSG_PKG1)".
-
-If the sender receives a new block between "getpkgtxns" and "pkgtxns", and transactions in the
-package are now no longer in the mempool, they will respond with "notfound" because they are missing
-transaction data. Upon receiving the "notfound", the receiver should re-request package information
-using "getdata(MSG_PKG1)".
-
-If the receiver receives a new block between "getpkgtxns" and "pkgtxns", it is a safe approach for
-the receiver to re-request package information using "getdata(MSG_PKG1)".
-
-[[File:./bip-v1-packages/newblock_rerequest.png|1000px]]
-
-''Diagram: "New block" scenarios in which additional messages must be sent.''
-
-'''Q: Can "getpkgtxns" and "pkgtxns" messages contain only one transaction?'''
-
-Yes.
+On the other hand, if a package transaction is unconfirmed in the receiver's chain tip but confirmed
+in the sender's chain tip, the package will contain orphans. The receiver should request a
+tx-with-unconfirmed-ancestors package, i.e. send "getdata(MSG_PKG2, orphan_wtxid)."
 
 ==Compatibility==
 
 Older clients remain fully compatible and interoperable after this change. Clients implementing this
 protocol will only attempt to send and request packages if agreed upon during the version handshake.
 
+If a node supports package relay, it may accept low-feerate transactions (e.g. paying zero fees)
+into its mempool, but non-package relay nodes would most likely reject them. In the interest of not
+wasting bandwidth, a package relay node should probably not announce descendants of below-fee-filter
+transactions to non-package relay peers.
+
 ===Package Erlay===
 
 A client using BIP330 reconciliation-based transaction relay (Erlay) is able to use package relay
 without interference. In fact, a package of transactions may be announced using both Erlay and
 package relay. After reconciliation, if the initiator would have announced a transaction by wtxid
-but also has package information for it, they may send "inv(MSG_PKG)" instead of "inv(WTX)".
+but has relevant package information for it, they may send "inv(MSG_PKG1)" instead of "inv(WTX)".
 
 [[File:./bip-v1-packages/package_erlay.png|900px]]
 
@@ -271,37 +255,36 @@ but also has package information for it, they may send "inv(MSG_PKG)" instead of
 ===Why Child With Parents?===
 
 From surveys of developers, with heavy consideration towards LN, it was determined that a
-two-generation, child-with-unconfirmed-parents topology would provide the desired utility. Namely,
+two-generation, child-with-parents topology would provide the desired utility. Namely,
 this allows for batched fee-bumping by CPFP. [4][5]
 
-A child-with-unconfirmed-parents package also has several properties that make many things easier to
+A child-with-parents package also has several properties that make many things easier to
 reason about.
 
+It's easy to verify whether a package is child-with-parents without access to mempool contents or
+current chainstate.
+
 Every transaction in the package is part of the child's ancestor set. This simplifies the
-enforcement of mempool descendant and ancestor limits. It also makes it possible to define a
-canonical package for a transaction using the current chainstate, which means any node can respond
-to a package request for any transaction in their mempool simply by querying their mempool for
-unconfirmed parents, without storing any additional package metadata.
+enforcement of mempool descendant and ancestor limits. It is easy for a node to decide when to
+announce a package using the contents of its mempool.
 
-Due to the two-generation restriction, even though dependencies between parents is allowed,
-reasoning about the incentive compatibility of a child-with-unconfirmed-parents package is
-relatively simple. A '''package feerate''' can be defined very simply and used in place of
-individual transaction feerate as follows:
+Due to the two-generation restriction, reasoning about the incentive compatibility of a
+child-with-parents package is relatively simple. A '''package feerate''' can be defined very simply
+and used in place of individual transaction feerate as follows:
 
-# Ensure that the package is child-with-unconfirmed-parents.
+# Ensure that the package is child-with-parents.
 
-# Remove any transactions in the package which have the same txid as another transaction in the mempool.
+# Remove any transactions in the package which are already in the mempool or have the same txid as another transaction in the mempool. Remove any transactions that may have confirmed recently.
 
-# Validate each transaction in the package individually for submission. If any transactions are successfully added to the mempool, remove them from the package.
+# Attempt to submit each transaction with its in-package ancestor set (in a child-with-parents package, this is usually just each individual transaction). If any transactions are successfully added to the mempool, remove them from the package.
 
 # The '''package feerate''' is the total fees divided by the total weight of all remaining transactions in the package.
 
 # Use package feerate in place of individual feerate when enforcing feerate-related policies such as minimum relay feerate, dynamic mempool minimum feerate, and replace-by-fee rules.
 
-
 [[File:./bip-v1-packages/dedup_still_too_low.png|600px]]
 
-'''Warning:''' These two aggregate feerate assessments work with child-with-unconfirmed-parents
+'''Warning:''' These two aggregate feerate assessments work with child-with-parents
 packages specifically due to their topology. They may not be incentive compatible for packages of
 other topologies.
 
@@ -309,7 +292,7 @@ other topologies.
 
 Package mempool acceptance logic and policy: [https://github.com/bitcoin/bitcoin/pull/22290 PR#22290]
 
-Package relay version 1: WIP
+Package relay : WIP
 
 ==Copyright==
 
@@ -317,7 +300,7 @@ This document is placed in the public domain.
 
 ==Acknowledgements==
 
-Thank you to John Newbery, Anthony Towns, and Martin Zumsande for input on the design.
+Thank you to Suhas Daftuar, John Newbery, Anthony Towns, and Martin Zumsande for input on the design.
 
 Thank you to Matt Corallo, Christian Decker, David Harding, Antoine Poinsot, Antoine Riard, Gregory
 Sanders, Chris Stewart, Bastien Teinturier, and others for input on the desired interface for
