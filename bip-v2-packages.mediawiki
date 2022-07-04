@@ -1,4 +1,4 @@
-pre>
+<pre>
   BIP: ?
   Layer: Peer Services
   Title: Tx-with-Unconfirmed-Ancestors (v2) Packages
@@ -72,12 +72,11 @@ A new getdata type MSG_PKG2 and a new PKGINFO2 protocol message are added.
 |txns||List of wtxids||txns_length * 32|| The wtxids of each transaction in the package.
 |}
 
-
 # The "pkginfo2" message has the structure defined above, with pchCommand == "pkginfo2".
 
-# Upon receipt of a "pkginfo" message, the node may use it to request the transactions not already in its mempool.
+# Upon receipt of a "pkginfo2" message, the node may use it to request the transactions not already in its mempool.
 
-# Upon receipt of a malformed "pkginfo2" message or package that does not abide by the rules of version 2 packages, the sender may be disconnected.
+# Upon receipt of a malformed "pkginfo2" message or package that does not abide by the rules of version 2 packages, the sender may be disconnected. The blockhash can be used to verify this rule.
 
 # A node MUST NOT send a "pkginfo2" message that has not been requested by the recipient. Upon receipt of an unsolicited "pkginfo", a node should disconnect the sender.
 
@@ -91,23 +90,31 @@ A new getdata type MSG_PKG2 and a new PKGINFO2 protocol message are added.
 
 # Upon receipt of a "getdata(MSG_PKG2)" request for, the node should respond with the "pkginfo2" corresponding to the requested transaction and its current chain tip, or with NOTFOUND. The node should not assume that the sender is requesting the transaction data as well.
 
-# The inv type should not be used in announcements, i.e. "inv(MSG_PKG2)".
+# The inv type should not be used in announcements, i.e. "inv(MSG_PKG2)" should never be sent.
 
 ===Version 2 Packages===
 
-Version 2 package relay supports tx-with-ancestors packages. All v2 packages sent between nodes MUST
-abide by the rules below, otherwise the package is malformed and the sender should be disconnected.
-A v2 or ''tx-with-unconfirmed-ancestors'' package can be defined for any transaction that spends
-unconfirmed inputs. This package can be identified by the transaction's wtxid and the current chain
-tip block hash.
+Version 2 package relay supports tx-with-ancestors packages. All v2 packages sent between nodes must
+abide by the rules below, otherwise the package is malformed and the sender may be disconnected. A
+v2 or ''tx-with-unconfirmed-ancestors'' package can be defined for any transaction that spends
+unconfirmed inputs. That transaction can be thought of as the "representative" of the package. From
+the perspective of a node, any package can be easily reconstructed using the representative
+transaction's wtxid and the contents of its mempool, and so these packages are announced using
+`MSG_PKG2(wtxid)` with the wtxid of that transaction.
 
-# ''Sorted topologically.'' For every transaction t in the package, if any of t's parents are present in the package, the parent must appear somewhere in the list before t.
+# ''All unconfirmed ancestors.'' All of the transaction's unconfirmed ancestors must be present. The package must not contain any other transactions.
 
-# ''All unconfirmed ancestors.'' All of the child's unconfirmed ancestors must be present. The package must not contain any other transactions.
+# ''Sorted topologically.'' For every transaction t in the package, each of t's ancestors must appear somewhere in the list before t.
 
 # ''No conflicts.'' None of the transactions in the package may conflict with each other (i.e. spend the same prevout).
 
 # '''Maximum count and size.''' The number of transactions does not exceed 25. The total weight (as defined by BIP141) of the transactions does not exceed 404000 Wu.
+
+Whether or not a transaction is confirmed depends on the chain state; two peers may have a different
+idea of what a transaction's unconfirmed ancestors are depending on what blocks they have received.
+As such, violating the ''all unconfirmed ancestors'' rule must not be penalized if the receiving
+node's chain tip does not match the block hash included included in the 'pkginfo2' message.
+Otherwise, network splits may happen due to nodes with different chain tips trying to relay packages.
 
 ==Compatibility==
 
@@ -116,14 +123,14 @@ protocol will only attempt to send and request packages if agreed upon during th
 
 ==Implementation==
 
-Note on validation: the mempool policy created for child-with-unconfirmed-parents packages is
-insufficient to ensure that a the fees of a tx-with-ancestors package would be evaluated correctly
-(probably the best algorithm is to submit each transaction with its ancestor subset of the package).
-The recommendation is to submit the transactions individually.
-
-==Implementation==
-
 WIP
+
+Note: When accepting a tx-with-unconfirmed-ancestors package, the policy should be similar to that
+of child-with-parents:
+
+# Remove any transactions in the package which are already in the mempool or have the same txid as another transaction in the mempool. Remove any transactions that may have confirmed recently.
+
+# Attempt to submit each transaction with its in-package ancestor set. For each ancestor set, use its aggregate feerate in place of individual feerate for feerate-related policies. If any transactions are successfully added to the mempool, remove them from the package.
 
 ==Copyright==
 
